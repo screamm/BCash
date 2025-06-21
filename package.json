@@ -1,0 +1,28 @@
+{
+  "name": "sparappen",
+  "version": "1.0.0",
+  "description": "Sparapp för barn och föräldrar",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create sparappen-db",
+    "db:init": "wrangler d1 execute sparappen-db --file=./schema.sql",
+    "db:seed": "wrangler d1 execute sparappen-db --file=./seed.sql",
+    "format": "prettier --write .",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.20.5",
+    "@typescript-eslint/eslint-plugin": "^8.34.1",
+    "@typescript-eslint/parser": "^8.34.1",
+    "eslint": "^9.29.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.3.3"
+  }
+}

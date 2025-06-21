@@ -1,0 +1,32 @@
+name = "sparappen"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sparappen-db"
+database_id = "e2d31896-eaf5-43fa-90db-eed16cf9c991"
+
+[build]
+command = ""
+cwd = "."
+watch_dir = "src"
+
+[site]
+bucket = "./public"
+
+[env.development]
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "sparappen-db-dev"
+database_id = "placeholder-dev"
+
+[env.production]
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "sparappen-db"
+database_id = "e2d31896-eaf5-43fa-90db-eed16cf9c991" 
