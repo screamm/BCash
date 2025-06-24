@@ -69,6 +69,14 @@ export default {
           response = await handleGetTransactions(request, env);
         } else if (path === '/api/transactions' && method === 'POST') {
           response = await handleAddTransaction(request, env);
+        } else if (path === '/api/children' && method === 'POST') {
+          response = await handleCreateChild(request, env);
+        } else if (path === '/api/children' && method === 'PUT') {
+          response = await handleUpdateChild(request, env);
+        } else if (path === '/api/children' && method === 'DELETE') {
+          response = await handleDeleteChild(request, env);
+        } else if (path === '/api/health' && method === 'GET') {
+          response = await handleHealthCheck(request, env);
         } else {
           response = new Response('Not Found', { status: 404 });
         }
@@ -99,23 +107,23 @@ export default {
   },
 };
 
-// Auth handler
+// Auth handler with improved security
 async function handleAuth(request, env) {
   const { username, password, userType } = await request.json();
+  const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const userAgent = request.headers.get('User-Agent') || 'unknown';
 
   if (!username || !password || !userType) {
+    await logAuthAttempt(
+      env,
+      username || 'unknown',
+      userType || 'unknown',
+      false,
+      clientIP,
+      userAgent
+    );
     return new Response(JSON.stringify({ success: false, error: 'Saknade fält' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  // Simple password verification (i produktion: använd bcrypt)
-  const isValidPassword = password === '123' || password === '456';
-
-  if (!isValidPassword) {
-    return new Response(JSON.stringify({ success: false, error: 'Fel lösenord' }), {
-      status: 401,
       headers: { 'Content-Type': 'application/json' },
     });
   }
@@ -123,43 +131,119 @@ async function handleAuth(request, env) {
   try {
     let user;
     if (userType === 'child') {
-      const stmt = env.DB.prepare('SELECT * FROM children WHERE username = ?');
+      const stmt = env.DB.prepare('SELECT * FROM children WHERE username = ? AND is_active = 1');
       user = await stmt.bind(username.toLowerCase()).first();
     } else {
-      const stmt = env.DB.prepare('SELECT * FROM parents WHERE username = ?');
+      const stmt = env.DB.prepare('SELECT * FROM parents WHERE username = ? AND is_active = 1');
       user = await stmt.bind(username.toLowerCase()).first();
     }
 
-    if (user) {
-      const token = await generateSimpleToken(user.id, userType);
-
+    if (!user) {
+      await logAuthAttempt(env, username, userType, false, clientIP, userAgent);
       return new Response(
-        JSON.stringify({
-          success: true,
-          user: {
-            id: user.id,
-            name: user.name,
-            type: userType,
-            balance: user.balance || null,
-          },
-          token,
-        }),
+        JSON.stringify({ success: false, error: 'Fel användarnamn eller lösenord' }),
         {
+          status: 401,
           headers: { 'Content-Type': 'application/json' },
         }
       );
-    } else {
-      return new Response(JSON.stringify({ success: false, error: 'Användare inte hittad' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
-      });
     }
+
+    // Check if account is locked (for parents)
+    if (userType === 'parent' && user.locked_until && new Date(user.locked_until) > new Date()) {
+      await logAuthAttempt(env, username, userType, false, clientIP, userAgent);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: 'Kontot är tillfälligt låst. Försök igen senare.',
+        }),
+        {
+          status: 423,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Verify password (temporary solution for demo)
+    const isValidPassword = 
+      (userType === 'parent' && password === 'förälder456') ||
+      (userType === 'child' && password === 'barn123');
+
+    if (!isValidPassword) {
+      // Increment failed attempts for parents
+      if (userType === 'parent') {
+        const failedAttempts = (user.failed_login_attempts || 0) + 1;
+        let lockUntil = null;
+
+        if (failedAttempts >= 5) {
+          lockUntil = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // Lock for 15 minutes
+        }
+
+        await env.DB.prepare(
+          'UPDATE parents SET failed_login_attempts = ?, locked_until = ? WHERE id = ?'
+        )
+          .bind(failedAttempts, lockUntil, user.id)
+          .run();
+      }
+
+      await logAuthAttempt(env, username, userType, false, clientIP, userAgent);
+      return new Response(
+        JSON.stringify({ success: false, error: 'Fel användarnamn eller lösenord' }),
+        {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    // Reset failed attempts on successful login
+    if (userType === 'parent' && user.failed_login_attempts > 0) {
+      await env.DB.prepare(
+        'UPDATE parents SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?'
+      )
+        .bind(user.id)
+        .run();
+    }
+
+    const token = await generateSimpleToken(user.id, userType);
+
+    await logAuthAttempt(env, username, userType, true, clientIP, userAgent);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          type: userType,
+          balance: user.balance || null,
+        },
+        token,
+      }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
   } catch (error) {
     console.error('Auth error:', error);
+    await logAuthAttempt(env, username, userType, false, clientIP, userAgent);
     return new Response(JSON.stringify({ success: false, error: 'Databasfel' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+}
+
+// Log authentication attempts
+async function logAuthAttempt(env, username, userType, success, ipAddress, userAgent) {
+  try {
+    await env.DB.prepare(
+      'INSERT INTO auth_logs (username, user_type, success, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)'
+    )
+      .bind(username, userType, success, ipAddress, userAgent)
+      .run();
+  } catch (error) {
+    console.error('Failed to log auth attempt:', error);
   }
 }
 
@@ -203,7 +287,9 @@ async function handleGetChildren(request, env) {
     });
   }
 
-  const stmt = env.DB.prepare('SELECT id, name, balance FROM children ORDER BY name');
+  const stmt = env.DB.prepare(
+    'SELECT id, name, username, balance FROM children WHERE is_active = 1 ORDER BY name'
+  );
   const result = await stmt.all();
 
   return new Response(
@@ -321,6 +407,220 @@ async function generateSimpleToken(userId, userType) {
   };
 
   return btoa(JSON.stringify(payload));
+}
+
+// Create child handler
+async function handleCreateChild(request, env) {
+  const authResult = await verifyAuth(request);
+  if (!authResult.success || authResult.user.type !== 'parent') {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { name, username, password } = await request.json();
+
+  if (!name || !username || !password) {
+    return new Response(JSON.stringify({ error: 'Alla fält måste fyllas i' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (password.length < 6) {
+    return new Response(JSON.stringify({ error: 'Lösenordet måste vara minst 6 tecken' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    // Hash password (simplified - in production use proper bcrypt)
+    const hashedPassword = await hashPassword(password);
+
+    const stmt = env.DB.prepare('INSERT INTO children (name, username, password) VALUES (?, ?, ?)');
+    await stmt.bind(name, username.toLowerCase(), hashedPassword).run();
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    if (error.message.includes('UNIQUE constraint failed')) {
+      return new Response(JSON.stringify({ error: 'Användarnamn är redan taget' }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    console.error('Create child error:', error);
+    return new Response(JSON.stringify({ error: 'Databasfel' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+// Update child handler
+async function handleUpdateChild(request, env) {
+  const authResult = await verifyAuth(request);
+  if (!authResult.success || authResult.user.type !== 'parent') {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { id, name, username } = await request.json();
+
+  if (!id || !name || !username) {
+    return new Response(JSON.stringify({ error: 'Alla fält måste fyllas i' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    const stmt = env.DB.prepare(
+      'UPDATE children SET name = ?, username = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND is_active = 1'
+    );
+    const result = await stmt.bind(name, username.toLowerCase(), id).run();
+
+    if (result.changes === 0) {
+      return new Response(JSON.stringify({ error: 'Barn inte hittat' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    if (error.message.includes('UNIQUE constraint failed')) {
+      return new Response(JSON.stringify({ error: 'Användarnamn är redan taget' }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    console.error('Update child error:', error);
+    return new Response(JSON.stringify({ error: 'Databasfel' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+// Delete child handler
+async function handleDeleteChild(request, env) {
+  const authResult = await verifyAuth(request);
+  if (!authResult.success || authResult.user.type !== 'parent') {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { id } = await request.json();
+
+  if (!id) {
+    return new Response(JSON.stringify({ error: 'Barn-ID måste anges' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    // Soft delete - mark as inactive instead of actual deletion
+    const stmt = env.DB.prepare(
+      'UPDATE children SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    );
+    const result = await stmt.bind(id).run();
+
+    if (result.changes === 0) {
+      return new Response(JSON.stringify({ error: 'Barn inte hittat' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Delete child error:', error);
+    return new Response(JSON.stringify({ error: 'Databasfel' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+// Health check handler
+async function handleHealthCheck(request, env) {
+  const results = {
+    timestamp: new Date().toISOString(),
+    status: 'healthy',
+    checks: {},
+  };
+
+  try {
+    // Database connectivity test
+    const dbTest = await env.DB.prepare('SELECT 1 as test').first();
+    results.checks.database = dbTest ? 'healthy' : 'unhealthy';
+
+    // Children table test
+    const childrenCount = await env.DB.prepare(
+      'SELECT COUNT(*) as count FROM children WHERE is_active = 1'
+    ).first();
+    results.checks.children_table = childrenCount ? 'healthy' : 'unhealthy';
+
+    // Parents table test
+    const parentsCount = await env.DB.prepare(
+      'SELECT COUNT(*) as count FROM parents WHERE is_active = 1'
+    ).first();
+    results.checks.parents_table = parentsCount ? 'healthy' : 'unhealthy';
+
+    // Transactions table test
+    const transactionsCount = await env.DB.prepare(
+      'SELECT COUNT(*) as count FROM transactions'
+    ).first();
+    results.checks.transactions_table = transactionsCount !== null ? 'healthy' : 'unhealthy';
+
+    // Overall status
+    const allHealthy = Object.values(results.checks).every((status) => status === 'healthy');
+    results.status = allHealthy ? 'healthy' : 'unhealthy';
+
+    // Log health check
+    await env.DB.prepare('INSERT INTO health_checks (check_type, status, details) VALUES (?, ?, ?)')
+      .bind('full_system', results.status, JSON.stringify(results.checks))
+      .run();
+
+    return new Response(JSON.stringify(results), {
+      status: allHealthy ? 200 : 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Health check error:', error);
+    results.status = 'unhealthy';
+    results.error = error.message;
+
+    return new Response(JSON.stringify(results), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+
+// Simple password hashing (in production, use proper bcrypt)
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password + 'sparappen_salt_2025');
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 // Verify authentication

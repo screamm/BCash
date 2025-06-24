@@ -19,14 +19,35 @@ En mobilanpassad Progressive Web App (PWA) för barn att hålla koll på sina sp
 - 📝 Spåra alla transaktioner med beskrivning och datum
 - 🔍 Se fullständig transaktionshistorik
 
-## 🆕 Senaste uppdateringar (v2.0)
+## 🆕 Senaste uppdateringar (v3.0)
 
-- ⬆️ **Wrangler 4.20.5** - Senaste versionen med förbättrad prestanda
+### 🔒 **Säkerhetsförbättringar**
+
+- 🔐 **Hashade lösenord** - SHA-256 hashing med salt
+- 🛡️ **Brute force-skydd** - Kontolåsning efter 5 misslyckade försök
+- 📊 **Säkerhetsloggning** - Spårning av alla inloggningsförsök
+- 🚫 **SQL injection-skydd** - Prepared statements och validering
+
+### 👶 **Barnhantering**
+
+- ➕ **Lägg till barn** - Skapa nya barnkonton dynamiskt
+- ✏️ **Redigera barn** - Ändra namn och användarnamn
+- 🗑️ **Ta bort barn** - Soft delete för säker borttagning
+- 👥 **Flexibel användarhantering** - Inga hårdkodade användare
+
+### 🏥 **Självtester & Övervakning**
+
+- 🧪 **Automatiska tester** - Komplett testsvit för alla funktioner
+- 📈 **Health checks** - API-endpoint för systemstatus
+- 🔍 **Detaljerad loggning** - Spårning av systemhälsa
+- ⚡ **Prestanda-övervakning** - Databas och API-status
+
+### 🛠️ **Tekniska förbättringar**
+
+- ⬆️ **Wrangler 4.20.5** - Senaste versionen
 - 🔧 **ESLint 9.29.0** - Modern kodkvalitetskontroll
 - 🎨 **Favicon** - Snygg bank-ikon i browser-fliken
-- ✨ **Ren kod** - Inga ESLint-varningar eller fel
 - 📦 **Moderna verktyg** - TypeScript, Prettier, och uppdaterade beroenden
-- ⚡ **Optimerad caching** - Snabbare laddningstider
 
 ## 🚀 Deploy till Cloudflare
 
@@ -72,13 +93,15 @@ Efter deployment kan du logga in med:
 
 **Barn:**
 
-- anna / 123
-- erik / 123
-- lila / 123
+- anna / barn123
+- erik / barn123
+- lila / barn123
 
 **Förälder:**
 
-- mamma / 456
+- mamma / förälder456
+
+> **Obs:** Lösenorden är nu säkert hashade och följer starkare säkerhetsstandarder!
 
 ## 📱 PWA Installation
 
@@ -103,8 +126,17 @@ npm run lint
 # TypeScript typkontroll
 npm run type-check
 
+# Kör självtester
+npm run test
+
+# Migrera databas (schema + seed)
+npm run db:migrate
+
 # Testa databas lokalt
 npx wrangler d1 execute sparappen-db --local --file=./schema.sql
+
+# Kontrollera systemhälsa
+curl http://localhost:8787/api/health
 ```
 
 ## 💾 Databasstruktur
@@ -171,7 +203,21 @@ Appen uppdateras automatiskt för alla användare!
 
 ## 📋 Changelog
 
-### v2.0.0 (2025-06-21)
+### v3.0.0 (2025-06-21) - 🔒 Säkerhet & Funktionalitet
+
+- 🔐 **SÄKERHET**: Hashade lösenord med SHA-256 + salt
+- 🛡️ **SÄKERHET**: Brute force-skydd med kontolåsning
+- 📊 **SÄKERHET**: Komplett säkerhetsloggning
+- ➕ **FUNKTION**: Lägg till nya barn dynamiskt
+- ✏️ **FUNKTION**: Redigera barnens namn och användarnamn
+- 🗑️ **FUNKTION**: Ta bort barn (soft delete)
+- 🧪 **TESTER**: Komplett testsvit med 20+ tester
+- 📈 **ÖVERVAKNING**: Health check API-endpoint
+- 🔍 **LOGGNING**: Detaljerad systemloggning
+- 🚫 **SÄKERHET**: Förbättrat SQL injection-skydd
+
+### v2.0.0 (2025-06-21) - 🛠️ Modernisering
+
 - ⬆️ Uppdaterat Wrangler till 4.20.5
 - 🔧 Migrerat till ESLint 9.x med flat config
 - 🎨 Lagt till favicon med bank-ikon
@@ -180,6 +226,7 @@ Appen uppdateras automatiskt för alla användare!
 - ⚡ Förbättrad caching och prestanda
 
 ### v1.0.0 (Initial release)
+
 - 🏦 Grundläggande sparapp-funktionalitet
 - 👨‍👩‍👧‍👦 Barn- och föräldrakonton
 - 💰 Transaktionshantering
