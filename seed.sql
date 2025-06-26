@@ -1,24 +1,24 @@
--- Lägg till testbarn med säkra hashade lösenord
--- Lösenord: barn123 (hashad med bcrypt)
-INSERT OR IGNORE INTO children (name, username, password, balance) VALUES
-('Anna', 'anna', '$2b$10$rOzHqKcJJBNb1xKJ0x8oTuQxPp6yJbJvfzQgHJyL8GzX2mNvOp4sK', 150),
-('Erik', 'erik', '$2b$10$rOzHqKcJJBNb1xKJ0x8oTuQxPp6yJbJvfzQgHJyL8GzX2mNvOp4sK', 250),
-('Lila', 'lila', '$2b$10$rOzHqKcJJBNb1xKJ0x8oTuQxPp6yJbJvfzQgHJyL8GzX2mNvOp4sK', 75);
-
--- Lägg till testförälder med säker hashad lösenord
--- Lösenord: förälder456 (hashad med bcrypt)
+-- Lägg till riktiga användare med säkra hashade lösenord
+-- Förälderkonto: PappaDavid (lösenord: barbapappa3386)
 INSERT OR IGNORE INTO parents (name, username, password) VALUES
-('Mamma', 'mamma', '$2b$10$8K7Qz9mNpLkJhGfDsA1sBOHxYvWuEtRqPo9IuYtReWqAzSxCvBnMi');
+('PappaDavid', 'PappaDavid', '$2b$12$8mJ2LJS1KolfODBn3G10C.oaATKP1lc/Kx6dLDieL6kN6J7DJkLL2');
 
--- Lägg till testtransaktioner
+-- Barn: Alexander och Alicia (lösenord: cocodrilobombino)
+INSERT OR IGNORE INTO children (name, username, password, balance) VALUES
+('Alexander', 'Alexander', '$2b$12$IT/bwZ4hQoOuZ.6KK.G.Aeaa7AAt4214AyeCkCAGw70XkCEXFhsgC', 500),
+('Alicia', 'Alicia', '$2b$12$lae4qruRgkHviqbCOfTsIuvQxdIVI.97CEIbu/Lr9TlxuG7iTRiMu', 350);
+
+-- Lägg till initiala transaktioner för barnen
 INSERT OR IGNORE INTO transactions (child_id, amount, description, type, created_by) VALUES
-(1, 50, 'Veckopeng', 'allowance', 1),
-(1, -25, 'Köpte godis', 'purchase', 1),
-(2, 100, 'Städade rummet', 'chore', 1),
-(2, -50, 'Sparade till leksak', 'savings', 1),
-(3, 25, 'Extra pengar', 'bonus', 1),
-(3, -10, 'Köpte klistermärken', 'purchase', 1);
+(1, 200, 'Startsaldo Alexander', 'allowance', 1),
+(1, 150, 'Veckopeng', 'allowance', 1),
+(1, 100, 'Extra belöning', 'bonus', 1),
+(1, 50, 'Städade rummet', 'chore', 1),
+(2, 150, 'Startsaldo Alicia', 'allowance', 1),
+(2, 100, 'Veckopeng', 'allowance', 1),
+(2, 75, 'Hjälpte till i köket', 'chore', 1),
+(2, 25, 'Extra pengar', 'bonus', 1);
 
 -- Initial health check
 INSERT OR IGNORE INTO health_checks (check_type, status, details) VALUES
-('database', 'healthy', 'Initial database setup completed successfully'); 
+('database', 'healthy', 'Database setup completed with real users successfully'); 

@@ -1,7 +1,7 @@
 {
-  "name": "sparappen",
-  "version": "3.0.0",
-  "description": "Sparapp för barn och föräldrar",
+  "name": "bcash-sparappen",
+  "version": "4.0.0",
+  "description": "Säker sparapp för barn och föräldrar med avancerade säkerhetsfunktioner",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -10,22 +10,63 @@
     "db:create": "wrangler d1 create sparappen-db",
     "db:init": "wrangler d1 execute sparappen-db --file=./schema.sql",
     "db:seed": "wrangler d1 execute sparappen-db --file=./seed.sql",
+    "db:migrate": "wrangler d1 execute sparappen-db --file=./schema.sql && wrangler d1 execute sparappen-db --file=./seed.sql",
+    "db:upgrade": "wrangler d1 execute sparappen-db --file=./upgrade-security.sql",
+    "db:backup": "wrangler d1 export sparappen-db --output backup-$(date +%Y%m%d).sql",
     "format": "prettier --write .",
     "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "type-check": "tsc --noEmit",
     "test": "node tests/health-check.js",
-    "db:migrate": "wrangler d1 execute sparappen-db --file=./schema.sql && wrangler d1 execute sparappen-db --file=./seed.sql"
+    "test:security": "node tests/security-tests.js",
+    "test:load": "node tests/load-tests.js",
+    "security:audit": "npm audit --audit-level high",
+    "security:check": "npm run security:audit && npm run test:security",
+    "predeployment": "npm run lint && npm run type-check && npm run test && npm run security:check",
+    "setup:secrets": "echo 'Run: wrangler secret put JWT_SECRET' && echo 'Generate strong secret at: https://generate-secret.vercel.app/256'",
+    "setup:production": "./setup-production.sh",
+    "secrets:jwt": "openssl rand -hex 32 | wrangler secret put JWT_SECRET",
+    "secrets:list": "wrangler secret list",
+    "gdpr:check": "echo 'GDPR endpoints available at /api/gdpr/*' && echo 'See security-guide.md for compliance details'",
+    "monitoring:setup": "echo 'Configure Sentry at https://sentry.io' && echo 'Set SENTRY_DSN via: wrangler secret put SENTRY_DSN'"
   },
+  "keywords": [
+    "sparapp",
+    "barn",
+    "family",
+    "savings",
+    "cloudflare",
+    "workers",
+    "d1",
+    "pwa",
+    "security"
+  ],
   "dependencies": {
-    "@cloudflare/workers-types": "^4.20250620.0"
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "@sentry/cloudflare": "^9.31.0",
+    "bcryptjs": "^3.0.2"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.34.1",
     "@typescript-eslint/parser": "^8.34.1",
     "eslint": "^9.29.0",
+    "eslint-plugin-security": "^3.0.1",
     "prettier": "^3.2.5",
     "typescript": "^5.3.3",
     "undici": "^7.10.0",
     "wrangler": "^4.20.5"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/username/bcash-sparappen.git"
+  },
+  "author": "BCash Team",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/username/bcash-sparappen/issues"
+  },
+  "homepage": "https://github.com/username/bcash-sparappen#readme"
 }

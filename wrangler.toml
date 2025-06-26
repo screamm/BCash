@@ -5,6 +5,17 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "production"
+# Secrets set via wrangler secret put:
+# JWT_SECRET - Strong random secret (256-bit)
+# SENTRY_DSN - Sentry monitoring DSN
+APP_NAME = "BCash Sparappen"
+SESSION_TIMEOUT = "86400"  # 24 hours in seconds
+MAX_LOGIN_ATTEMPTS = "5"
+LOCKOUT_DURATION = "900"   # 15 minutes in seconds
+RATE_LIMIT_WINDOW = "900"  # 15 minutes in seconds  
+RATE_LIMIT_MAX = "10"      # max attempts per window
+BCRYPT_ROUNDS = "12"       # bcrypt salt rounds
+GDPR_DATA_RETENTION_DAYS = "1095"  # 3 years
 
 [[d1_databases]]
 binding = "DB"
@@ -20,12 +31,22 @@ watch_dir = "src"
 bucket = "./public"
 
 [env.development]
+[env.development.vars]
+ENVIRONMENT = "development"
+SESSION_TIMEOUT = "3600"   # 1 hour for dev
+
 [[env.development.d1_databases]]
 binding = "DB"
 database_name = "sparappen-db-dev"
 database_id = "placeholder-dev"
 
 [env.production]
+[env.production.vars]
+ENVIRONMENT = "production"
+SESSION_TIMEOUT = "86400"
+MAX_LOGIN_ATTEMPTS = "3"   # More strict in production
+LOCKOUT_DURATION = "1800"  # 30 minutes in production
+
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "sparappen-db"
