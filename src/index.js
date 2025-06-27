@@ -126,6 +126,10 @@ async function handleRequest(request, env, ctx) {
         response = await handleUpdateChild(request, env);
       } else if (path === '/api/children' && method === 'DELETE') {
         response = await handleDeleteChild(request, env);
+      } else if (path.startsWith('/api/transactions/') && method === 'PUT') {
+        response = await handleUpdateTransaction(request, env);
+      } else if (path.startsWith('/api/transactions/') && method === 'DELETE') {
+        response = await handleDeleteTransaction(request, env);
               } else if (path === '/api/health' && method === 'GET') {
           response = await handleHealthCheck(request, env);
         } else if (path === '/api/gdpr/export' && method === 'POST') {
@@ -548,6 +552,9 @@ async function handleGetTransactions(request, env) {
     });
   }
 
+  const url = new URL(request.url);
+  const childId = url.searchParams.get('childId');
+
   let stmt;
   if (authResult.user.type === 'child') {
     stmt = env.DB.prepare(`
@@ -559,6 +566,17 @@ async function handleGetTransactions(request, env) {
       LIMIT 50
     `);
     stmt = stmt.bind(authResult.user.id);
+  } else if (childId) {
+    // Parent requesting specific child's transactions
+    stmt = env.DB.prepare(`
+      SELECT t.*, c.name as child_name 
+      FROM transactions t 
+      JOIN children c ON t.child_id = c.id 
+      WHERE t.child_id = ? 
+      ORDER BY t.created_at DESC 
+      LIMIT 100
+    `);
+    stmt = stmt.bind(childId);
   } else {
     stmt = env.DB.prepare(`
       SELECT t.*, c.name as child_name 
@@ -781,6 +799,138 @@ async function handleDeleteChild(request, env) {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+}
+
+// Update transaction handler
+async function handleUpdateTransaction(request, env) {
+  const authResult = await verifyAuth(request, env);
+  if (!authResult.success || authResult.user.type !== 'parent') {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const url = new URL(request.url);
+  const transactionId = url.pathname.split('/').pop();
+
+  if (!transactionId) {
+    return new Response(JSON.stringify({ success: false, error: 'Transaction ID krävs' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { amount, description } = await request.json();
+
+  if (!amount || !description) {
+    return new Response(JSON.stringify({ success: false, error: 'Belopp och beskrivning krävs' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    // Get the old transaction to calculate balance difference
+    const oldTransaction = await env.DB.prepare('SELECT * FROM transactions WHERE id = ?')
+      .bind(transactionId).first();
+
+    if (!oldTransaction) {
+      return new Response(JSON.stringify({ success: false, error: 'Transaktion hittades inte' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    const balanceDifference = amount - oldTransaction.amount;
+
+    // Update transaction and child balance
+    await env.DB.batch([
+      env.DB.prepare('UPDATE transactions SET amount = ?, description = ? WHERE id = ?')
+        .bind(amount, description, transactionId),
+      env.DB.prepare('UPDATE children SET balance = balance + ? WHERE id = ?')
+        .bind(balanceDifference, oldTransaction.child_id)
+    ]);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: 'Transaktion uppdaterad',
+      }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  } catch (error) {
+    console.error('Update transaction error:', error);
+    return new Response(
+      JSON.stringify({ success: false, error: 'Kunde inte uppdatera transaktion' }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  }
+}
+
+// Delete transaction handler
+async function handleDeleteTransaction(request, env) {
+  const authResult = await verifyAuth(request, env);
+  if (!authResult.success || authResult.user.type !== 'parent') {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  const url = new URL(request.url);
+  const transactionId = url.pathname.split('/').pop();
+
+  if (!transactionId) {
+    return new Response(JSON.stringify({ success: false, error: 'Transaction ID krävs' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    // Get transaction details before deleting
+    const transaction = await env.DB.prepare('SELECT * FROM transactions WHERE id = ?')
+      .bind(transactionId).first();
+
+    if (!transaction) {
+      return new Response(JSON.stringify({ success: false, error: 'Transaktion hittades inte' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Delete transaction and update child balance
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM transactions WHERE id = ?').bind(transactionId),
+      env.DB.prepare('UPDATE children SET balance = balance - ? WHERE id = ?')
+        .bind(transaction.amount, transaction.child_id)
+    ]);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: 'Transaktion borttagen',
+      }),
+      {
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  } catch (error) {
+    console.error('Delete transaction error:', error);
+    return new Response(
+      JSON.stringify({ success: false, error: 'Kunde inte ta bort transaktion' }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
   }
 }
 
@@ -1440,6 +1590,16 @@ function getIndexHTML() {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            position: relative;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+
+        .kid-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+            border-color: #4CAF50;
+            background: linear-gradient(135deg, #f8f9ff 0%, #e8f5e8 100%);
         }
 
         .kid-info h3 {
@@ -1597,7 +1757,12 @@ function getIndexHTML() {
                 <div class="user-info">Inloggad som förälder</div>
             </div>
             
-            <h3 style="margin-bottom: 15px;">Barnens saldo</h3>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3>Barnens saldo</h3>
+                <button class="btn-small" onclick="showChildModal('add')" style="background: #28a745; color: white; border: none; padding: 8px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;">
+                    👶 Lägg till barn
+                </button>
+            </div>
             <div class="kids-grid" id="kidsGrid">
                 <div class="loading">Laddar barn...</div>
             </div>
@@ -1646,6 +1811,109 @@ function getIndexHTML() {
             
             <button class="btn" id="transactionBtn" onclick="addTransaction()">Genomför</button>
             <button class="btn btn-secondary" onclick="closeModal()">Avbryt</button>
+        </div>
+    </div>
+
+    <!-- Child Management Modal -->
+    <div id="childModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button class="close-btn" onclick="closeChildModal()">&times;</button>
+                <h2 id="childModalTitle">Lägg till barn</h2>
+            </div>
+            
+            <div id="childError" class="error" style="display: none;"></div>
+            <div id="childSuccess" class="success" style="display: none;"></div>
+            
+            <div class="form-group">
+                <label for="childName">Namn:</label>
+                <input type="text" id="childName" placeholder="Barnets namn">
+            </div>
+            
+            <div class="form-group">
+                <label for="childUsername">Användarnamn:</label>
+                <input type="text" id="childUsername" placeholder="Användarnamn för inloggning">
+            </div>
+            
+            <div class="form-group">
+                <label for="childPassword">Lösenord:</label>
+                <input type="password" id="childPassword" placeholder="Lösenord för barnet">
+            </div>
+            
+            <div class="form-group">
+                <label for="childBalance">Startsaldo (kr):</label>
+                <input type="number" id="childBalance" placeholder="0" min="0">
+            </div>
+            
+            <button class="btn" id="childBtn" onclick="saveChild()">Spara</button>
+            <button class="btn btn-secondary" onclick="closeChildModal()">Avbryt</button>
+        </div>
+    </div>
+
+    <!-- Edit Transaction Modal -->
+    <div id="editTransactionModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button class="close-btn" onclick="closeEditTransactionModal()">&times;</button>
+                <h2>Redigera transaktion</h2>
+            </div>
+            
+            <div id="editTransactionError" class="error" style="display: none;"></div>
+            <div id="editTransactionSuccess" class="success" style="display: none;"></div>
+            
+            <div class="form-group">
+                <label for="editSelectChild">Barn:</label>
+                <select id="editSelectChild"></select>
+            </div>
+            
+            <div class="form-group">
+                <label for="editAmount">Belopp (kr):</label>
+                <input type="number" id="editAmount" placeholder="0">
+            </div>
+            
+            <div class="form-group">
+                <label for="editDescription">Beskrivning:</label>
+                <textarea id="editDescription" rows="3" placeholder="Beskrivning..."></textarea>
+            </div>
+            
+            <button class="btn" id="editTransactionBtn" onclick="updateTransaction()">Uppdatera</button>
+            <button class="btn btn-secondary" onclick="closeEditTransactionModal()">Avbryt</button>
+        </div>
+    </div>
+
+    <!-- Child Transactions Modal -->
+    <div id="childTransactionsModal" class="modal">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <button class="close-btn" onclick="closeChildTransactionsModal()">&times;</button>
+                <h2 id="childTransactionsTitle">Transaktioner för barn</h2>
+            </div>
+            
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;">
+                <div>
+                    <h3 id="childTransactionsName" style="margin: 0; font-size: 18px;">Barn</h3>
+                    <div style="font-size: 14px; opacity: 0.9;">Aktuellt saldo</div>
+                </div>
+                <div id="childTransactionsBalance" style="font-size: 24px; font-weight: bold;">0 kr</div>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <button class="btn" onclick="showTransactionModalForChild()" style="background: #28a745; margin-right: 10px;">
+                    💰 Lägg till pengar
+                </button>
+                <button class="btn" onclick="showTransactionModalForChild('remove')" style="background: #dc3545;">
+                    💸 Ta bort pengar
+                </button>
+            </div>
+            
+            <h4 style="margin-bottom: 15px;">📋 Alla transaktioner</h4>
+            <div class="transaction-list" id="childTransactionsList" style="max-height: 400px; overflow-y: auto;">
+                <div class="loading">Laddar transaktioner...</div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+                <button class="btn btn-secondary" onclick="closeChildTransactionsModal()">Stäng</button>
+            </div>
         </div>
     </div>
 
@@ -1777,12 +2045,25 @@ function getIndexHTML() {
             }
             
             grid.innerHTML = children.map(child => \`
-                <div class="kid-card">
+                <div class="kid-card" onclick="showChildTransactions(\${child.id}, '\${child.name}')" style="cursor: pointer;">
                     <div class="kid-info">
                         <h3>\${child.name}</h3>
                         <div style="color: #888; font-size: 14px;">Saldo</div>
+                        <div style="margin-top: 8px;">
+                            <button onclick="event.stopPropagation(); showChildModal('edit', \${child.id}, '\${child.name}', '\${child.username}')" 
+                                    style="background: #ffc107; color: #333; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-right: 5px;">
+                                ✏️ Redigera
+                            </button>
+                            <button onclick="event.stopPropagation(); deleteChild(\${child.id}, '\${child.name}')" 
+                                    style="background: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;">
+                                🗑️ Ta bort
+                            </button>
+                        </div>
                     </div>
                     <div class="kid-balance">\${child.balance || 0} kr</div>
+                    <div style="position: absolute; bottom: 5px; right: 10px; font-size: 12px; color: #666;">
+                        👆 Klicka för transaktioner
+                    </div>
                 </div>
             \`).join('');
         }
@@ -1844,6 +2125,18 @@ function getIndexHTML() {
                                 \${userType === 'parent' && transaction.child_name ? transaction.child_name + ': ' : ''}\${transaction.description}
                             </div>
                             <div class="transaction-date">\${date}</div>
+                            \${userType === 'parent' ? \`
+                                <div style="margin-top: 5px;">
+                                    <button onclick="editTransaction(\${transaction.id}, \${transaction.child_id}, \${transaction.amount}, '\${transaction.description}', '\${transaction.child_name || ''}')" 
+                                            style="background: #ffc107; color: #333; border: none; padding: 3px 6px; border-radius: 3px; font-size: 10px; cursor: pointer; margin-right: 5px;">
+                                        ✏️ Redigera
+                                    </button>
+                                    <button onclick="deleteTransaction(\${transaction.id})" 
+                                            style="background: #dc3545; color: white; border: none; padding: 3px 6px; border-radius: 3px; font-size: 10px; cursor: pointer;">
+                                        🗑️ Ta bort
+                                    </button>
+                                </div>
+                            \` : ''}
                         </div>
                         <div class="transaction-amount \${isPositive ? 'positive' : 'negative'}">
                             \${isPositive ? '+' : ''}\${transaction.amount} kr
@@ -1925,6 +2218,11 @@ function getIndexHTML() {
                     // Refresh dashboard
                     await updateParentDashboard();
                     
+                    // If child transactions modal is open, refresh it too
+                    if (selectedChildId && document.getElementById('childTransactionsModal').classList.contains('active')) {
+                        await loadChildTransactions(selectedChildId);
+                    }
+                    
                     // Close modal after a delay
                     setTimeout(() => {
                         closeModal();
@@ -1938,6 +2236,385 @@ function getIndexHTML() {
             } finally {
                 transactionBtn.disabled = false;
                 transactionBtn.textContent = 'Genomför';
+            }
+        }
+
+        // Child Management Functions
+        let currentChildId = null;
+        let currentChildMode = 'add';
+        let currentTransactionId = null;
+        let selectedChildId = null;
+        let selectedChildName = null;
+
+        function showChildModal(mode, childId = null, name = '', username = '') {
+            currentChildMode = mode;
+            currentChildId = childId;
+            
+            document.getElementById('childModalTitle').textContent = 
+                mode === 'add' ? 'Lägg till barn' : 'Redigera barn';
+            
+            if (mode === 'edit') {
+                document.getElementById('childName').value = name;
+                document.getElementById('childUsername').value = username;
+                document.getElementById('childPassword').value = '';
+                document.getElementById('childBalance').value = '';
+                
+                // Hide password field for edit mode
+                document.getElementById('childPassword').parentElement.style.display = 'none';
+                document.getElementById('childBalance').parentElement.style.display = 'none';
+            } else {
+                document.getElementById('childName').value = '';
+                document.getElementById('childUsername').value = '';
+                document.getElementById('childPassword').value = '';
+                document.getElementById('childBalance').value = '0';
+                
+                // Show all fields for add mode
+                document.getElementById('childPassword').parentElement.style.display = 'block';
+                document.getElementById('childBalance').parentElement.style.display = 'block';
+            }
+            
+            document.getElementById('childModal').classList.add('active');
+            hideError('childError');
+            hideSuccess('childSuccess');
+        }
+
+        function closeChildModal() {
+            document.getElementById('childModal').classList.remove('active');
+            currentChildId = null;
+            currentChildMode = 'add';
+        }
+
+        async function saveChild() {
+            const name = document.getElementById('childName').value.trim();
+            const username = document.getElementById('childUsername').value.trim();
+            const password = document.getElementById('childPassword').value;
+            const balance = parseInt(document.getElementById('childBalance').value) || 0;
+            
+            if (!name || !username) {
+                showError('childError', 'Fyll i namn och användarnamn');
+                return;
+            }
+            
+            if (currentChildMode === 'add' && !password) {
+                showError('childError', 'Fyll i lösenord');
+                return;
+            }
+            
+            const childBtn = document.getElementById('childBtn');
+            childBtn.disabled = true;
+            childBtn.textContent = 'Sparar...';
+            
+            try {
+                let url = '/api/children';
+                let method = 'POST';
+                let body = { name, username };
+                
+                if (currentChildMode === 'add') {
+                    body.password = password;
+                    body.balance = balance;
+                } else {
+                    method = 'PUT';
+                    body.id = currentChildId;
+                    if (password) body.password = password;
+                }
+                
+                const response = await fetch(API_BASE + url, {
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + authToken
+                    },
+                    body: JSON.stringify(body)
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    showSuccess('childSuccess', currentChildMode === 'add' ? 'Barn tillagt!' : 'Barn uppdaterat!');
+                    
+                    // Refresh dashboard
+                    await updateParentDashboard();
+                    
+                    // Close modal after delay
+                    setTimeout(() => {
+                        closeChildModal();
+                    }, 1500);
+                } else {
+                    showError('childError', data.error || 'Något gick fel');
+                }
+            } catch (error) {
+                console.error('Save child error:', error);
+                showError('childError', 'Nätverksfel. Försök igen.');
+            } finally {
+                childBtn.disabled = false;
+                childBtn.textContent = 'Spara';
+            }
+        }
+
+        async function deleteChild(childId, childName) {
+            if (!confirm(\`Är du säker på att du vill ta bort \${childName}? Detta kommer även ta bort alla transaktioner för barnet.\`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(API_BASE + '/api/children', {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + authToken
+                    },
+                    body: JSON.stringify({ id: childId })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    alert('Barn borttaget!');
+                    await updateParentDashboard();
+                } else {
+                    alert('Fel: ' + (data.error || 'Något gick fel'));
+                }
+            } catch (error) {
+                console.error('Delete child error:', error);
+                alert('Nätverksfel. Försök igen.');
+            }
+        }
+
+        // Transaction Management Functions
+        function editTransaction(transactionId, childId, amount, description, childName) {
+            currentTransactionId = transactionId;
+            
+            // Populate edit form
+            document.getElementById('editAmount').value = amount;
+            document.getElementById('editDescription').value = description;
+            
+            // Populate child select and set current child
+            const editSelect = document.getElementById('editSelectChild');
+            editSelect.innerHTML = \`<option value="\${childId}">\${childName}</option>\`;
+            editSelect.value = childId;
+            
+            document.getElementById('editTransactionModal').classList.add('active');
+            hideError('editTransactionError');
+            hideSuccess('editTransactionSuccess');
+        }
+
+        function closeEditTransactionModal() {
+            document.getElementById('editTransactionModal').classList.remove('active');
+            currentTransactionId = null;
+        }
+
+        async function updateTransaction() {
+            const amount = parseInt(document.getElementById('editAmount').value);
+            const description = document.getElementById('editDescription').value.trim();
+            
+            if (!amount || amount === 0) {
+                showError('editTransactionError', 'Ange ett giltigt belopp');
+                return;
+            }
+            
+            if (!description) {
+                showError('editTransactionError', 'Lägg till en beskrivning');
+                return;
+            }
+            
+            const editBtn = document.getElementById('editTransactionBtn');
+            editBtn.disabled = true;
+            editBtn.textContent = 'Uppdaterar...';
+            
+            try {
+                const response = await fetch(API_BASE + '/api/transactions/' + currentTransactionId, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + authToken
+                    },
+                    body: JSON.stringify({ amount, description })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    showSuccess('editTransactionSuccess', 'Transaktion uppdaterad!');
+                    
+                    // Refresh dashboard
+                    await updateParentDashboard();
+                    
+                    // Close modal after delay
+                    setTimeout(() => {
+                        closeEditTransactionModal();
+                    }, 1500);
+                } else {
+                    showError('editTransactionError', data.error || 'Något gick fel');
+                }
+            } catch (error) {
+                console.error('Update transaction error:', error);
+                showError('editTransactionError', 'Nätverksfel. Försök igen.');
+            } finally {
+                editBtn.disabled = false;
+                editBtn.textContent = 'Uppdatera';
+            }
+        }
+
+        async function deleteTransaction(transactionId) {
+            if (!confirm('Är du säker på att du vill ta bort denna transaktion?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(API_BASE + '/api/transactions/' + transactionId, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    alert('Transaktion borttagen!');
+                    await updateParentDashboard();
+                } else {
+                    alert('Fel: ' + (data.error || 'Något gick fel'));
+                }
+            } catch (error) {
+                console.error('Delete transaction error:', error);
+                alert('Nätverksfel. Försök igen.');
+            }
+        }
+
+        // Child Transactions Functions
+        async function showChildTransactions(childId, childName) {
+            selectedChildId = childId;
+            selectedChildName = childName;
+            
+            document.getElementById('childTransactionsTitle').textContent = 'Transaktioner för ' + childName;
+            document.getElementById('childTransactionsName').textContent = childName;
+            
+            // Show modal
+            document.getElementById('childTransactionsModal').classList.add('active');
+            
+            // Load child's transactions
+            await loadChildTransactions(childId);
+        }
+
+        function closeChildTransactionsModal() {
+            document.getElementById('childTransactionsModal').classList.remove('active');
+            selectedChildId = null;
+            selectedChildName = null;
+        }
+
+        async function loadChildTransactions(childId) {
+            try {
+                // Load child's current balance
+                const childResponse = await fetch(API_BASE + '/api/children', {
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken
+                    }
+                });
+                
+                if (childResponse.ok) {
+                    const childData = await childResponse.json();
+                    const child = childData.children.find(c => c.id === childId);
+                    if (child) {
+                        document.getElementById('childTransactionsBalance').textContent = (child.balance || 0) + ' kr';
+                    }
+                }
+
+                // Load child's transactions
+                const transactionsResponse = await fetch(API_BASE + '/api/transactions?childId=' + childId, {
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken
+                    }
+                });
+                
+                if (transactionsResponse.ok) {
+                    const data = await transactionsResponse.json();
+                    updateChildTransactionsList(data.transactions);
+                } else {
+                    document.getElementById('childTransactionsList').innerHTML = '<div class="error">Kunde inte ladda transaktioner</div>';
+                }
+            } catch (error) {
+                console.error('Load child transactions error:', error);
+                document.getElementById('childTransactionsList').innerHTML = '<div class="error">Nätverksfel</div>';
+            }
+        }
+
+        function updateChildTransactionsList(transactions) {
+            const container = document.getElementById('childTransactionsList');
+            
+            if (!transactions || transactions.length === 0) {
+                container.innerHTML = '<div style="padding: 30px; text-align: center; color: #888;">Inga transaktioner än</div>';
+                return;
+            }
+            
+            container.innerHTML = transactions.map(transaction => {
+                const isPositive = transaction.amount > 0;
+                const date = new Date(transaction.created_at).toLocaleDateString('sv-SE');
+                
+                return \`
+                    <div class="transaction-item">
+                        <div class="transaction-info">
+                            <div class="transaction-desc">\${transaction.description}</div>
+                            <div class="transaction-date">\${date}</div>
+                            <div style="margin-top: 5px;">
+                                <button onclick="editTransactionFromChild(\${transaction.id}, \${transaction.child_id}, \${transaction.amount}, '\${transaction.description}', '\${selectedChildName}')" 
+                                        style="background: #ffc107; color: #333; border: none; padding: 3px 6px; border-radius: 3px; font-size: 10px; cursor: pointer; margin-right: 5px;">
+                                    ✏️ Redigera
+                                </button>
+                                <button onclick="deleteTransactionFromChild(\${transaction.id})" 
+                                        style="background: #dc3545; color: white; border: none; padding: 3px 6px; border-radius: 3px; font-size: 10px; cursor: pointer;">
+                                    🗑️ Ta bort
+                                </button>
+                            </div>
+                        </div>
+                        <div class="transaction-amount \${isPositive ? 'positive' : 'negative'}">
+                            \${isPositive ? '+' : ''}\${transaction.amount} kr
+                        </div>
+                    </div>
+                \`;
+            }).join('');
+        }
+
+        function showTransactionModalForChild(type = 'add') {
+            // Set the child in the main transaction modal
+            const selectChild = document.getElementById('selectChild');
+            selectChild.innerHTML = '<option value="' + selectedChildId + '">' + selectedChildName + '</option>';
+            selectChild.value = selectedChildId;
+            
+            // Show the main transaction modal
+            showTransactionModal(type);
+        }
+
+        function editTransactionFromChild(transactionId, childId, amount, description, childName) {
+            editTransaction(transactionId, childId, amount, description, childName);
+        }
+
+        async function deleteTransactionFromChild(transactionId) {
+            if (!confirm('Är du säker på att du vill ta bort denna transaktion?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(API_BASE + '/api/transactions/' + transactionId, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': 'Bearer ' + authToken
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success) {
+                    alert('Transaktion borttagen!');
+                    // Refresh child transactions and main dashboard
+                    await loadChildTransactions(selectedChildId);
+                    await updateParentDashboard();
+                } else {
+                    alert('Fel: ' + (data.error || 'Något gick fel'));
+                }
+            } catch (error) {
+                console.error('Delete transaction error:', error);
+                alert('Nätverksfel. Försök igen.');
             }
         }
 
